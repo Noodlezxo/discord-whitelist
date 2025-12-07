@@ -1,7 +1,27 @@
 require('dotenv').config();
+const express = require('express');
 const { Client, GatewayIntentBits } = require('discord.js');
 const axios = require('axios');
 
+// Create Express app for healthcheck
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Simple healthcheck endpoint
+app.get('/', (req, res) => {
+    res.json({
+        status: 'ok',
+        service: 'roblox-username-bot',
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Start HTTP server
+app.listen(PORT, () => {
+    console.log(`✅ HTTP server listening on port ${PORT}`);
+});
+
+// Discord Bot Setup
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -15,26 +35,41 @@ const client = new Client({
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GIST_ID = process.env.GIST_ID;
 
-// Check if required environment variables are set
+// Check environment variables
+console.log('🔧 Checking environment variables...');
 if (!process.env.DISCORD_TOKEN) {
-    console.error('ERROR: DISCORD_TOKEN is not set in environment variables!');
+    console.error('❌ ERROR: DISCORD_TOKEN is not set!');
     process.exit(1);
+} else {
+    console.log('✅ DISCORD_TOKEN: Set');
 }
 
 if (!GITHUB_TOKEN) {
-    console.error('ERROR: GITHUB_TOKEN is not set in environment variables!');
+    console.error('❌ ERROR: GITHUB_TOKEN is not set!');
     process.exit(1);
+} else {
+    console.log('✅ GITHUB_TOKEN: Set');
 }
 
 if (!GIST_ID) {
-    console.error('ERROR: GIST_ID is not set in environment variables!');
+    console.error('❌ ERROR: GIST_ID is not set!');
     process.exit(1);
+} else {
+    console.log(`✅ GIST_ID: ${GIST_ID}`);
 }
+
+// Store bot status for healthcheck
+let botStatus = {
+    ready: false,
+    lastActivity: null,
+    usernameCount: 0,
+    lastUpdate: null
+};
 
 // Function to fetch current gist data
 async function fetchGistData() {
     try {
-        console.log(`Fetching gist data from ID: ${GIST_ID}`);
+        console.log(`📥 Fetching gist data...`);
         const response = await axios.get(`https://api.github.com/gists/${GIST_ID}`, {
             headers: {
                 'Authorization': `Bearer ${GITHUB_TOKEN}`,
@@ -43,19 +78,15 @@ async function fetchGistData() {
             }
         });
         
-        console.log('Successfully fetched gist data');
         const files = response.data.files;
         const firstFile = Object.keys(files)[0];
+        console.log(`✅ Gist fetched successfully`);
         return {
             content: files[firstFile].content,
             filename: firstFile
         };
     } catch (error) {
-        console.error('Error fetching gist:', error.message);
-        if (error.response) {
-            console.error('Status:', error.response.status);
-            console.error('Data:', error.response.data);
-        }
+        console.error('❌ Error fetching gist:', error.message);
         return null;
     }
 }
@@ -63,9 +94,8 @@ async function fetchGistData() {
 // Function to add username to gist
 async function addUsernameToGist(username) {
     try {
-        console.log(`Attempting to add username: ${username}`);
+        console.log(`➕ Adding username: ${username}`);
         
-        // Fetch current data
         const gistData = await fetchGistData();
         if (!gistData || !gistData.content) {
             throw new Error('Could not fetch current gist data');
@@ -76,13 +106,11 @@ async function addUsernameToGist(username) {
         const newLines = [];
         let added = false;
         
-        // Process each line
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
             
             // Check if this is the closing brace line
             if (line.trim() === '}' && !added) {
-                // Add the new username before the closing brace
                 newLines.push(`    "${username}",`);
                 added = true;
             }
@@ -99,7 +127,6 @@ async function addUsernameToGist(username) {
         const updatedContent = newLines.join('\n');
         
         // Update the gist
-        console.log(`Updating gist file: ${filename}`);
         await axios.patch(`https://api.github.com/gists/${GIST_ID}`, {
             files: {
                 [filename]: {
@@ -114,14 +141,11 @@ async function addUsernameToGist(username) {
             }
         });
         
-        console.log(`Successfully added username: ${username}`);
+        console.log(`✅ Successfully added: ${username}`);
+        botStatus.lastUpdate = new Date().toISOString();
         return true;
     } catch (error) {
-        console.error('Error updating gist:', error.message);
-        if (error.response) {
-            console.error('Status:', error.response.status);
-            console.error('Data:', JSON.stringify(error.response.data));
-        }
+        console.error('❌ Error updating gist:', error.message);
         return false;
     }
 }
@@ -132,7 +156,6 @@ async function usernameExists(username) {
         const gistData = await fetchGistData();
         if (!gistData) return false;
         
-        // Check if username is in the content (case-sensitive)
         const pattern = new RegExp(`"${username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`);
         return pattern.test(gistData.content);
     } catch (error) {
@@ -157,6 +180,7 @@ async function listUsernames() {
             }
         }
         
+        botStatus.usernameCount = usernames.length;
         return usernames;
     } catch (error) {
         console.error('Error listing usernames:', error);
@@ -165,46 +189,57 @@ async function listUsernames() {
 }
 
 // Bot ready event
-client.once('ready', () => {
-    console.log(`✅ Bot is ready! Logged in as ${client.user.tag}`);
+client.once('ready', async () => {
+    console.log(`\n🤖 Bot is ready!`);
+    console.log(`📛 Logged in as: ${client.user.tag}`);
+    console.log(`🆔 User ID: ${client.user.id}`);
     console.log(`📊 Serving ${client.guilds.cache.size} servers`);
-    console.log(`👤 Bot is online and ready to receive commands`);
+    console.log(`🔗 Invite URL: https://discord.com/oauth2/authorize?client_id=${client.user.id}&scope=bot&permissions=274878024704`);
+    
+    botStatus.ready = true;
+    botStatus.lastActivity = new Date().toISOString();
+    
+    // Update username count on startup
+    const usernames = await listUsernames();
+    if (usernames) {
+        console.log(`📋 Total usernames in database: ${usernames.length}`);
+    }
+    
+    // Set bot activity
+    client.user.setActivity('!help | Adding Roblox usernames');
 });
 
 // Handle messages
 client.on('messageCreate', async (message) => {
-    // Ignore messages from bots
     if (message.author.bot) return;
+    
+    botStatus.lastActivity = new Date().toISOString();
     
     // Command: !add <username>
     if (message.content.startsWith('!add ')) {
         const username = message.content.slice(5).trim();
         
         if (!username) {
-            return message.reply('❌ Please provide a username. Usage: `!add <roblox_username>`');
+            return message.reply('❌ Usage: `!add <roblox_username>`');
         }
         
-        // Validate username
         if (username.length < 3 || username.length > 20) {
-            return message.reply('❌ Username must be between 3 and 20 characters.');
+            return message.reply('❌ Username must be 3-20 characters.');
         }
         
         // Check if exists
         const exists = await usernameExists(username);
         if (exists) {
-            return message.reply(`❌ Username **${username}** is already in the database.`);
+            return message.reply(`❌ **${username}** already exists.`);
         }
         
-        // Send processing message
-        const processingMsg = await message.reply(`⏳ Adding **${username}** to database...`);
-        
-        // Add to gist
+        const processingMsg = await message.reply(`⏳ Adding **${username}**...`);
         const success = await addUsernameToGist(username);
         
         if (success) {
-            await processingMsg.edit(`✅ Successfully added **${username}** to the database!`);
+            await processingMsg.edit(`✅ **${username}** added successfully!`);
         } else {
-            await processingMsg.edit('❌ Failed to add username. Please try again later.');
+            await processingMsg.edit('❌ Failed to add username.');
         }
     }
     
@@ -218,26 +253,26 @@ client.on('messageCreate', async (message) => {
         
         const exists = await usernameExists(username);
         if (exists) {
-            message.reply(`✅ **${username}** exists in the database.`);
+            message.reply(`✅ **${username}** exists.`);
         } else {
-            message.reply(`❌ **${username}** is not in the database.`);
+            message.reply(`❌ **${username}** not found.`);
         }
     }
     
     // Command: !list
     if (message.content === '!list') {
-        const processingMsg = await message.reply('⏳ Fetching usernames...');
-        
         const usernames = await listUsernames();
         
         if (!usernames || usernames.length === 0) {
-            return processingMsg.edit('❌ No usernames found in database.');
+            return message.reply('❌ No usernames found.');
         }
         
         if (usernames.length <= 10) {
-            processingMsg.edit(`📋 **Usernames in database:**\n${usernames.map(u => `• ${u}`).join('\n')}\n\n**Total:** ${usernames.length}`);
+            message.reply(`📋 **Usernames (${usernames.length}):**\n${usernames.map(u => `• ${u}`).join('\n')}`);
         } else {
-            processingMsg.edit(`📋 **Total usernames:** ${usernames.length}\n(Use !count for exact count)`);
+            // Show first 10 only if many
+            const firstTen = usernames.slice(0, 10);
+            message.reply(`📋 **First 10 of ${usernames.length} usernames:**\n${firstTen.map(u => `• ${u}`).join('\n')}\n*Use !count for total*`);
         }
     }
     
@@ -249,21 +284,23 @@ client.on('messageCreate', async (message) => {
             return message.reply('❌ Could not fetch database.');
         }
         
-        message.reply(`📊 **Total usernames in database:** ${usernames.length}`);
+        message.reply(`📊 **Total usernames:** ${usernames.length}`);
     }
     
     // Command: !help
     if (message.content === '!help') {
         const helpMessage = `
-🤖 **Roblox Username Bot Commands:**
+🤖 **Roblox Username Bot**
 
-\`!add <username>\` - Add a Roblox username to the database
-\`!check <username>\` - Check if a username exists
-\`!list\` - Show all usernames (truncated if many)
-\`!count\` - Show total number of usernames
-\`!help\` - Show this help message
+**Commands:**
+\`!add <username>\` - Add Roblox username
+\`!check <username>\` - Check if exists
+\`!list\` - Show usernames
+\`!count\` - Show total count
+\`!help\` - This message
+\`!ping\` - Check bot status
 
-**Note:** Usernames are case-sensitive and must be 3-20 characters.
+**Note:** Usernames are case-sensitive (3-20 chars)
         `;
         
         message.reply(helpMessage);
@@ -272,17 +309,63 @@ client.on('messageCreate', async (message) => {
     // Command: !ping
     if (message.content === '!ping') {
         const latency = Date.now() - message.createdTimestamp;
-        message.reply(`🏓 Pong! Latency: ${latency}ms | API: ${Math.round(client.ws.ping)}ms`);
+        const uptime = process.uptime();
+        const hours = Math.floor(uptime / 3600);
+        const minutes = Math.floor((uptime % 3600) / 60);
+        const seconds = Math.floor(uptime % 60);
+        
+        message.reply(`🏓 Pong! 
+• Latency: ${latency}ms 
+• API: ${Math.round(client.ws.ping)}ms
+• Uptime: ${hours}h ${minutes}m ${seconds}s
+• Status: ${botStatus.ready ? '✅ Ready' : '❌ Not ready'}`);
+    }
+    
+    // Command: !status (admin)
+    if (message.content === '!status') {
+        const usernames = await listUsernames();
+        const statusMessage = `
+🤖 **Bot Status**
+• Ready: ${botStatus.ready ? '✅' : '❌'}
+• Last Activity: ${botStatus.lastActivity || 'Never'}
+• Usernames: ${usernames ? usernames.length : 'Unknown'}
+• Last Update: ${botStatus.lastUpdate || 'Never'}
+• Memory: ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB
+        `;
+        
+        message.reply(statusMessage);
     }
 });
 
 // Error handling
 client.on('error', console.error);
-process.on('unhandledRejection', console.error);
+client.on('warn', console.warn);
 
-// Login
-console.log('Starting bot...');
-client.login(process.env.DISCORD_TOKEN).catch(error => {
-    console.error('Failed to login:', error);
+process.on('unhandledRejection', (error) => {
+    console.error('Unhandled rejection:', error);
+});
+
+// Healthcheck endpoint with bot status
+app.get('/health', (req, res) => {
+    res.json({
+        status: botStatus.ready ? 'healthy' : 'starting',
+        bot: {
+            ready: botStatus.ready,
+            usernameCount: botStatus.usernameCount,
+            lastActivity: botStatus.lastActivity,
+            uptime: process.uptime()
+        },
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Start the bot
+console.log('🚀 Starting Roblox Username Bot...');
+
+// Login to Discord
+client.login(process.env.DISCORD_TOKEN).then(() => {
+    console.log('🔑 Logging in to Discord...');
+}).catch(error => {
+    console.error('❌ Failed to login:', error);
     process.exit(1);
 });
