@@ -1,7 +1,7 @@
 {
   "name": "roblox-username-bot",
   "version": "1.0.0",
-  "description": "Discord bot to manage Roblox usernames in a Gist",
+  "description": "Discord bot to manage Roblox usernames with admin controls",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
