@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionsBitField, Collection } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionsBitField } = require('discord.js');
 const axios = require('axios');
 
 // Create Express app
@@ -31,10 +31,9 @@ const GIST_ID = process.env.GIST_ID;
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID || client.user?.id;
 
-// Admin IDs - Add your Discord user IDs here
-// To get your Discord ID: Enable Developer Mode in Discord > Right-click your name > Copy ID
+// Admin IDs
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',') : [];
-const WHITELIST_CHANNEL_ID = process.env.WHITELIST_CHANNEL_ID; // Optional: restrict to specific channel
+const WHITELIST_CHANNEL_ID = process.env.WHITELIST_CHANNEL_ID;
 
 // Check env vars
 if (!DISCORD_TOKEN) {
@@ -52,18 +51,32 @@ function isAdmin(userId) {
     return ADMIN_IDS.includes(userId);
 }
 
-// Helper function to check if user has admin permissions
-function hasAdminPermissions(member) {
-    return member.permissions.has(PermissionsBitField.Flags.Administrator) || 
-           isAdmin(member.id);
+// Whitelist storage
+let whitelist = {
+    users: new Set(ADMIN_IDS),
+    roles: new Set()
+};
+
+// Helper function to check if user is whitelisted
+function isWhitelisted(member) {
+    if (isAdmin(member.id)) return true;
+    if (whitelist.users.has(member.id)) return true;
+    
+    for (const roleId of whitelist.roles) {
+        if (member.roles.cache.has(roleId)) return true;
+    }
+    
+    if (member.permissions.has(PermissionsBitField.Flags.Administrator)) return true;
+    
+    return false;
 }
 
-// Define Slash Commands
+// Define Slash Commands (SIMPLIFIED STRUCTURE)
 const commands = [
     // Public commands
     new SlashCommandBuilder()
         .setName('check')
-        .setDescription('Check if a Roblox username exists in the database')
+        .setDescription('Check if a Roblox username exists')
         .addStringOption(option =>
             option.setName('username')
                 .setDescription('The Roblox username to check')
@@ -71,7 +84,7 @@ const commands = [
     
     new SlashCommandBuilder()
         .setName('list')
-        .setDescription('List all usernames in the database'),
+        .setDescription('List all usernames in database'),
     
     new SlashCommandBuilder()
         .setName('count')
@@ -85,95 +98,85 @@ const commands = [
         .setName('help')
         .setDescription('Show help information'),
     
-    // Admin-only commands
+    // Admin add command
     new SlashCommandBuilder()
-        .setName('admin')
-        .setDescription('Admin commands')
+        .setName('add')
+        .setDescription('Add a Roblox username (Admin only)')
+        .addStringOption(option =>
+            option.setName('username')
+                .setDescription('Roblox username to add')
+                .setRequired(true)
+                .setMinLength(3)
+                .setMaxLength(20)),
+    
+    // Admin remove command  
+    new SlashCommandBuilder()
+        .setName('remove')
+        .setDescription('Remove a username (Admin only)')
+        .addStringOption(option =>
+            option.setName('username')
+                .setDescription('Roblox username to remove')
+                .setRequired(true)),
+    
+    // Whitelist commands
+    new SlashCommandBuilder()
+        .setName('whitelist_user')
+        .setDescription('Manage user whitelist (Admin only)')
         .addSubcommand(subcommand =>
             subcommand
                 .setName('add')
-                .setDescription('Add a Roblox username to database (Admin only)')
-                .addStringOption(option =>
-                    option.setName('username')
-                        .setDescription('The Roblox username to add')
-                        .setRequired(true)
-                        .setMinLength(3)
-                        .setMaxLength(20)))
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('remove')
-                .setDescription('Remove a username from database (Admin only)')
-                .addStringOption(option =>
-                    option.setName('username')
-                        .setDescription('The Roblox username to remove')
+                .setDescription('Add user to whitelist')
+                .addUserOption(option =>
+                    option.setName('user')
+                        .setDescription('User to whitelist')
                         .setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand
-                .setName('whitelist')
-                .setDescription('Whitelist management (Admin only)')
-                .addSubcommandGroup(group =>
-                    group
-                        .setName('user')
-                        .setDescription('User whitelist management')
-                        .addSubcommand(sub =>
-                            sub
-                                .setName('add')
-                                .setDescription('Add user to whitelist')
-                                .addUserOption(option =>
-                                    option.setName('user')
-                                        .setDescription('User to whitelist')
-                                        .setRequired(true)))
-                        .addSubcommand(sub =>
-                            sub
-                                .setName('remove')
-                                .setDescription('Remove user from whitelist')
-                                .addUserOption(option =>
-                                    option.setName('user')
-                                        .setDescription('User to remove')
-                                        .setRequired(true)))
-                        .addSubcommand(sub =>
-                            sub
-                                .setName('list')
-                                .setDescription('List whitelisted users')))
-                .addSubcommandGroup(group =>
-                    group
-                        .setName('role')
-                        .setDescription('Role whitelist management')
-                        .addSubcommand(sub =>
-                            sub
-                                .setName('add')
-                                .setDescription('Add role to whitelist')
-                                .addRoleOption(option =>
-                                    option.setName('role')
-                                        .setDescription('Role to whitelist')
-                                        .setRequired(true)))
-                        .addSubcommand(sub =>
-                            sub
-                                .setName('remove')
-                                .setDescription('Remove role from whitelist')
-                                .addRoleOption(option =>
-                                    option.setName('role')
-                                        .setDescription('Role to remove')
-                                        .setRequired(true)))
-                        .addSubcommand(sub =>
-                            sub
-                                .setName('list')
-                                .setDescription('List whitelisted roles'))))
+                .setName('remove')
+                .setDescription('Remove user from whitelist')
+                .addUserOption(option =>
+                    option.setName('user')
+                        .setDescription('User to remove')
+                        .setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand
-                .setName('stats')
-                .setDescription('Show bot statistics'))
+                .setName('list')
+                .setDescription('List whitelisted users')),
+    
+    new SlashCommandBuilder()
+        .setName('whitelist_role')
+        .setDescription('Manage role whitelist (Admin only)')
         .addSubcommand(subcommand =>
             subcommand
-                .setName('reload')
-                .setDescription('Reload the username database'))
+                .setName('add')
+                .setDescription('Add role to whitelist')
+                .addRoleOption(option =>
+                    option.setName('role')
+                        .setDescription('Role to whitelist')
+                        .setRequired(true)))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('remove')
+                .setDescription('Remove role from whitelist')
+                .addRoleOption(option =>
+                    option.setName('role')
+                        .setDescription('Role to remove')
+                        .setRequired(true)))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('list')
+                .setDescription('List whitelisted roles')),
+    
+    // Stats command
+    new SlashCommandBuilder()
+        .setName('stats')
+        .setDescription('Show bot statistics (Admin only)'),
+    
+    // Reload command
+    new SlashCommandBuilder()
+        .setName('reload')
+        .setDescription('Reload database (Admin only)')
 ].map(command => command.toJSON());
-
-// Whitelist storage (in-memory, persists until restart)
-let whitelist = {
-    users: new Set(ADMIN_IDS), // Admins are automatically whitelisted
-    roles: new Set()
-};
 
 // Register Slash Commands
 const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
@@ -194,6 +197,7 @@ async function registerCommands() {
         );
         
         console.log('✅ Slash commands registered successfully!');
+        console.log(`📋 Commands registered: ${commands.length}`);
     } catch (error) {
         console.error('❌ Error registering commands:', error);
     }
@@ -302,10 +306,9 @@ async function removeUsernameFromGist(username) {
             const line = lines[i];
             const trimmedLine = line.trim();
             
-            // Skip the line that contains the username
             if (trimmedLine === `"${username}"` || trimmedLine === `"${username}",`) {
                 removed = true;
-                continue; // Skip this line (remove it)
+                continue;
             }
             
             newLines.push(line);
@@ -364,25 +367,6 @@ async function listUsernames() {
     }
 }
 
-// Helper function to check if user is whitelisted
-function isWhitelisted(member) {
-    // Check admin IDs first
-    if (isAdmin(member.id)) return true;
-    
-    // Check user whitelist
-    if (whitelist.users.has(member.id)) return true;
-    
-    // Check role whitelist
-    for (const roleId of whitelist.roles) {
-        if (member.roles.cache.has(roleId)) return true;
-    }
-    
-    // Check admin permissions
-    if (member.permissions.has(PermissionsBitField.Flags.Administrator)) return true;
-    
-    return false;
-}
-
 // Bot Events
 client.once('ready', async () => {
     console.log(`✅ Bot ready: ${client.user.tag}`);
@@ -391,11 +375,8 @@ client.once('ready', async () => {
     console.log(`👥 Whitelisted users: ${whitelist.users.size}`);
     console.log(`🎭 Whitelisted roles: ${whitelist.roles.size}`);
     
-    // Register slash commands
     await registerCommands();
-    
-    // Set activity
-    client.user.setActivity('/help | Whitelist system');
+    client.user.setActivity('/help | Admin system');
 });
 
 // Handle Slash Commands
@@ -405,25 +386,26 @@ client.on('interactionCreate', async interaction => {
     // Check channel restriction
     if (WHITELIST_CHANNEL_ID && interaction.channelId !== WHITELIST_CHANNEL_ID) {
         return interaction.reply({
-            content: `❌ This command can only be used in <#${WHITELIST_CHANNEL_ID}>`,
+            content: `❌ Commands can only be used in <#${WHITELIST_CHANNEL_ID}>`,
             ephemeral: true
         });
     }
     
-    // Check for admin commands
-    if (interaction.commandName === 'admin') {
+    const { commandName, options } = interaction;
+    
+    // Check admin permissions for admin commands
+    const adminCommands = ['add', 'remove', 'whitelist_user', 'whitelist_role', 'stats', 'reload'];
+    if (adminCommands.includes(commandName)) {
         if (!isWhitelisted(interaction.member)) {
             return interaction.reply({
-                content: '❌ You do not have permission to use admin commands.',
+                content: '❌ You do not have permission to use this command.',
                 ephemeral: true
             });
         }
     }
     
-    // Defer reply for longer operations
-    await interaction.deferReply({ ephemeral: interaction.commandName === 'admin' });
-    
-    const { commandName, options } = interaction;
+    // Defer reply
+    await interaction.deferReply({ ephemeral: adminCommands.includes(commandName) });
     
     try {
         switch (commandName) {
@@ -491,11 +473,12 @@ client.on('interactionCreate', async interaction => {
 \`/help\` - This message
 
 **Admin Commands:**
-\`/admin add <username>\` - Add username
-\`/admin remove <username>\` - Remove username
-\`/admin whitelist\` - Manage whitelist
-\`/admin stats\` - Bot statistics
-\`/admin reload\` - Reload database
+\`/add <username>\` - Add username to database
+\`/remove <username>\` - Remove username from database
+\`/whitelist_user\` - Manage user whitelist
+\`/whitelist_role\` - Manage role whitelist
+\`/stats\` - Bot statistics
+\`/reload\` - Reload database
 
 **Note:** Admin commands require whitelist access.
                 `;
@@ -504,83 +487,81 @@ client.on('interactionCreate', async interaction => {
                 break;
             }
             
-            case 'admin': {
+            case 'add': {
+                const username = options.getString('username');
+                
+                if (username.length < 3 || username.length > 20) {
+                    return interaction.editReply('❌ Username must be 3-20 characters.');
+                }
+                
+                const exists = await usernameExists(username);
+                if (exists) {
+                    return interaction.editReply(`❌ **${username}** already exists.`);
+                }
+                
+                const success = await addUsernameToGist(username);
+                
+                if (success) {
+                    await interaction.editReply(`✅ **${username}** added successfully!`);
+                } else {
+                    await interaction.editReply('❌ Failed to add username.');
+                }
+                break;
+            }
+            
+            case 'remove': {
+                const username = options.getString('username');
+                const result = await removeUsernameFromGist(username);
+                
+                if (result.success) {
+                    await interaction.editReply(`✅ ${result.message}`);
+                } else {
+                    await interaction.editReply(`❌ ${result.message}`);
+                }
+                break;
+            }
+            
+            case 'whitelist_user': {
                 const subcommand = options.getSubcommand();
-                const subcommandGroup = options.getSubcommandGroup();
                 
-                // Admin Add Username
                 if (subcommand === 'add') {
-                    const username = options.getString('username');
-                    
-                    if (username.length < 3 || username.length > 20) {
-                        return interaction.editReply('❌ Username must be 3-20 characters.');
-                    }
-                    
-                    const exists = await usernameExists(username);
-                    if (exists) {
-                        return interaction.editReply(`❌ **${username}** already exists.`);
-                    }
-                    
-                    const success = await addUsernameToGist(username);
-                    
-                    if (success) {
-                        await interaction.editReply(`✅ **${username}** added successfully!`);
-                    } else {
-                        await interaction.editReply('❌ Failed to add username.');
-                    }
+                    const user = options.getUser('user');
+                    whitelist.users.add(user.id);
+                    await interaction.editReply(`✅ Added ${user.tag} to whitelist.`);
+                } else if (subcommand === 'remove') {
+                    const user = options.getUser('user');
+                    whitelist.users.delete(user.id);
+                    await interaction.editReply(`✅ Removed ${user.tag} from whitelist.`);
+                } else if (subcommand === 'list') {
+                    const userList = Array.from(whitelist.users).map(id => `<@${id}>`).join('\n') || 'None';
+                    await interaction.editReply(`**👥 Whitelisted Users:**\n${userList}\n\n**Total:** ${whitelist.users.size}`);
                 }
+                break;
+            }
+            
+            case 'whitelist_role': {
+                const subcommand = options.getSubcommand();
                 
-                // Admin Remove Username
-                else if (subcommand === 'remove') {
-                    const username = options.getString('username');
-                    const result = await removeUsernameFromGist(username);
-                    
-                    if (result.success) {
-                        await interaction.editReply(`✅ ${result.message}`);
-                    } else {
-                        await interaction.editReply(`❌ ${result.message}`);
-                    }
+                if (subcommand === 'add') {
+                    const role = options.getRole('role');
+                    whitelist.roles.add(role.id);
+                    await interaction.editReply(`✅ Added role **${role.name}** to whitelist.`);
+                } else if (subcommand === 'remove') {
+                    const role = options.getRole('role');
+                    whitelist.roles.delete(role.id);
+                    await interaction.editReply(`✅ Removed role **${role.name}** from whitelist.`);
+                } else if (subcommand === 'list') {
+                    const roleList = Array.from(whitelist.roles).map(id => `<@&${id}>`).join('\n') || 'None';
+                    await interaction.editReply(`**🎭 Whitelisted Roles:**\n${roleList}\n\n**Total:** ${whitelist.roles.size}`);
                 }
+                break;
+            }
+            
+            case 'stats': {
+                const usernames = await listUsernames();
+                const usernameCount = usernames ? usernames.length : 0;
                 
-                // Admin Whitelist Management
-                else if (subcommand === 'whitelist') {
-                    if (subcommandGroup === 'user') {
-                        const userSub = options.getSubcommand();
-                        const user = options.getUser('user');
-                        
-                        if (userSub === 'add') {
-                            whitelist.users.add(user.id);
-                            await interaction.editReply(`✅ Added ${user.tag} to whitelist.`);
-                        } else if (userSub === 'remove') {
-                            whitelist.users.delete(user.id);
-                            await interaction.editReply(`✅ Removed ${user.tag} from whitelist.`);
-                        } else if (userSub === 'list') {
-                            const userList = Array.from(whitelist.users).map(id => `<@${id}>`).join('\n') || 'None';
-                            await interaction.editReply(`**👥 Whitelisted Users:**\n${userList}\n\n**Total:** ${whitelist.users.size}`);
-                        }
-                    } else if (subcommandGroup === 'role') {
-                        const roleSub = options.getSubcommand();
-                        const role = options.getRole('role');
-                        
-                        if (roleSub === 'add') {
-                            whitelist.roles.add(role.id);
-                            await interaction.editReply(`✅ Added role **${role.name}** to whitelist.`);
-                        } else if (roleSub === 'remove') {
-                            whitelist.roles.delete(role.id);
-                            await interaction.editReply(`✅ Removed role **${role.name}** from whitelist.`);
-                        } else if (roleSub === 'list') {
-                            const roleList = Array.from(whitelist.roles).map(id => `<@&${id}>`).join('\n') || 'None';
-                            await interaction.editReply(`**🎭 Whitelisted Roles:**\n${roleList}\n\n**Total:** ${whitelist.roles.size}`);
-                        }
-                    }
-                }
-                
-                // Admin Stats
-                else if (subcommand === 'stats') {
-                    const usernames = await listUsernames();
-                    const usernameCount = usernames ? usernames.length : 0;
-                    
-                    const stats = `
+                const stats = `
 📊 **Bot Statistics**
 • **Usernames in DB:** ${usernameCount}
 • **Whitelisted Users:** ${whitelist.users.size}
@@ -589,21 +570,19 @@ client.on('interactionCreate', async interaction => {
 • **Guilds:** ${client.guilds.cache.size}
 • **Uptime:** ${Math.floor(process.uptime() / 3600)}h ${Math.floor((process.uptime() % 3600) / 60)}m
 • **Memory:** ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB
-                    `;
-                    
-                    await interaction.editReply(stats);
-                }
+                `;
                 
-                // Admin Reload
-                else if (subcommand === 'reload') {
-                    const usernames = await listUsernames();
-                    if (usernames) {
-                        await interaction.editReply(`✅ Database reloaded. Found ${usernames.length} usernames.`);
-                    } else {
-                        await interaction.editReply('❌ Failed to reload database.');
-                    }
+                await interaction.editReply(stats);
+                break;
+            }
+            
+            case 'reload': {
+                const usernames = await listUsernames();
+                if (usernames) {
+                    await interaction.editReply(`✅ Database reloaded. Found ${usernames.length} usernames.`);
+                } else {
+                    await interaction.editReply('❌ Failed to reload database.');
                 }
-                
                 break;
             }
         }
